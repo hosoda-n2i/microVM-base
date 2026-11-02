@@ -1,0 +1,91 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: dev tools
+description: 開発に使う道具（gh・Volta・direnv）と設定を足す。Claude Code の workload に重ねて使う
+
+args:
+  gh_version:
+    default: "2.102.0"
+    pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
+    buildArg: GH_VERSION
+  volta_version:
+    default: "2.0.2"
+    pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
+    buildArg: VOLTA_VERSION
+  direnv_version:
+    default: "2.38.2"
+    pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
+    buildArg: DIRENV_VERSION
+
+provides: ["gh@${{ kit.args.gh_version }}", "volta@${{ kit.args.volta_version }}", "direnv@${{ kit.args.direnv_version }}"]
+
+capabilities:
+  # GitHub への通信（リポジトリ以下の DELETE だけは止める）と、Volta が Node を取りに行く nodejs.org
+  - type: com.docker.sandbox/network-policy@2
+    config:
+      runtime:
+        allow:
+          - nodejs.org
+          - github.com
+          - hosts: [api.github.com]
+            methods: [GET, HEAD, POST, PATCH, PUT, DELETE]
+          - hosts: [uploads.github.com]
+            methods: [POST, PUT]
+        deny:
+          - hosts: [api.github.com]
+            methods: [DELETE]
+            paths: [/repos/**]
+
+  # GitHub の鍵。Mac で sbx secret set github したときだけ、プロキシが差し込む
+  - type: com.docker.sandbox/credential@1
+    description: GitHub API access for gh
+    optional: true
+    config:
+      service: github
+      phase: [runtime]
+      apiKey:
+        name: GH_TOKEN
+        proxyManaged: true
+        inject:
+          - {domain: api.github.com, header: Authorization, format: "Bearer %s"}
+          - {domain: uploads.github.com, header: Authorization, format: "Bearer %s"}
+          - {domain: github.com, header: Authorization, format: "Bearer %s"}
+
+  # Volta の入口を ~/.volta/bin に作り、bash が読む /etc/sandbox-persistent.sh で PATH の先頭に足す
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install:
+        - description: Set up Volta shims for node, npm and npx
+          user: "0"
+          command: |
+            set -e
+            install -d -o agent -g agent /home/agent/.volta /home/agent/.volta/bin
+            for tool in node npm npx; do
+              ln -sfn /usr/local/bin/volta-shim "/home/agent/.volta/bin/${tool}"
+              chown -h agent:agent "/home/agent/.volta/bin/${tool}"
+            done
+            printf '%s\n' '# Volta（dev-tools）' 'export VOLTA_HOME="$HOME/.volta"' 'export PATH="$VOLTA_HOME/bin:$PATH"' >> /etc/sandbox-persistent.sh
+        # direnv の hook を、対話の bash が読む ~/.bashrc の末尾に足す。
+        # workload の ~/.bashrc が PROMPT_COMMAND を上書きするので、その後ろに置く（/etc/sandbox-persistent.sh はコマンドのたびに読まれるので入れない）
+        - description: Hook direnv into interactive bash
+          user: agent
+          command: |
+            set -e
+            printf '%s\n' '# direnv（dev-tools）' 'command -v direnv >/dev/null 2>&1 && eval "$(direnv hook bash)"' >> /home/agent/.bashrc
+        # 中の Claude に渡す説明（context.md）を、ワークスペースの CLAUDE.md として置く。
+        # ワークスペースとその下で起動した Claude は、起動のときにこれを読む（agent-context だと案内の1行だけになり、読むかが Claude 次第になる）
+        - description: Place the agent guidance as the workspace CLAUDE.md
+          user: agent
+          command: |
+            set -e
+            install -d /home/agent/workspace
+            install -m 0644 /usr/share/dev-tools/CLAUDE.md /home/agent/workspace/CLAUDE.md
+      # 起動のたびに Claude Code を最新にする。workload の版が古くても、起動すれば最新になる。失敗しても起動は止めない
+      startup:
+        - description: Update Claude Code to the latest release
+          background: true
+          command: |
+            HOME=/home/agent /home/agent/.local/bin/claude update > /tmp/claude-update.log 2>&1 || true
+
+dockerfile: dev-tools.dockerfile

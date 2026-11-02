@@ -1,0 +1,14 @@
+# syntax=docker/sandbox-kit:3
+# プロジェクトごとに書き換える Kit。ワークスペースの下に作るフォルダなど、そのプロジェクトだけの設定を置く
+schemaVersion: "3"
+kind: mixin
+displayName: project
+description: プロジェクトごとの設定（ワークスペースの下のフォルダなど）を足す。dev-tools と一緒に重ねて使う
+
+args:
+  # ワークスペース（/home/agent/workspace）の下に作るフォルダ。カンマで区切って書く（例："app,docs"）
+  workspace_folders:
+    default: ""
+    buildArg: WORKSPACE_FOLDERS
+
+dockerfile: project.dockerfile

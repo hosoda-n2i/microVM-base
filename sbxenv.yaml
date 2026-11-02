@@ -1,0 +1,10 @@
+# sbx env で使う環境ファイル。make up（sbx env create）で、この内容の VM を作る
+schemaVersion: "1"
+name: forge-agent
+agent: sbx-kit-claude
+
+# Docker 公式の Claude Code の workload は latest を使う。Claude Code 本体は、VM の起動のたびに dev-tools が更新する
+kits:
+  - docker.io/docker/sbx-kit-claude:latest
+  - ./kits/dev-tools
+  - ./kits/project
